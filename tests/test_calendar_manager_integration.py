@@ -1,10 +1,9 @@
-import time
 from datetime import datetime, timedelta
 
 import pytest
 
-from src.mcp_ical.ical import CalendarManager, NoSuchCalendarException
-from src.mcp_ical.models import (
+from mcp_ical.ical import CalendarManager, NoSuchCalendarException
+from mcp_ical.models import (
     CreateEventRequest,
     Frequency,
     RecurrenceRule,
@@ -12,27 +11,13 @@ from src.mcp_ical.models import (
 )
 
 
+pytestmark = pytest.mark.integration
+
+
 @pytest.fixture(scope="session")
 def calendar_manager():
     """Create a single CalendarManager instance for all tests."""
     return CalendarManager()
-
-
-@pytest.fixture(scope="session", autouse=True)
-def cleanup_calendars_after_tests():
-    """Fixture that runs after all tests to ensure calendars are properly cleaned up."""
-    yield
-
-    print("Waiting for iCloud sync before final calendar cleanup...")
-    time.sleep(5)
-
-    # Get a fresh calendar manager
-    calendar_manager = CalendarManager()
-
-    # Clean up any remaining test calendars
-    for calendar in calendar_manager.list_calendars():
-        if calendar.title().startswith("test_calendar_"):
-            calendar_manager._delete_calendar(calendar.uniqueIdentifier())
 
 
 @pytest.fixture
@@ -47,7 +32,7 @@ def test_calendar(calendar_manager):
     yield {"name": calendar_name, "manager": calendar_manager}
 
     try:
-        calendar_manager._delete_calendar(calendar.uniqueIdentifier())
+        calendar_manager._delete_calendar(calendar.calendarIdentifier())
     except Exception as e:
         print(f"Failed to cleanup test calendar {calendar_name}: {e}")
 
@@ -163,7 +148,7 @@ def test_update_event(calendar_manager, test_event_base, test_calendar, cleanup_
             calendar_name=test_calendar["name"],
         )
     )
-    # cleanup_events(event.identifier)
+    cleanup_events(event.identifier)
 
     # Update event
     new_title = "Updated Test Event"
@@ -268,14 +253,12 @@ def test_all_day_event_with_reminders(calendar_manager, test_event_base, test_ca
     assert 5760 in actual_alarms, "4 day reminder not found"
 
 
-def test_event_across_calendars(calendar_manager, test_event_base, test_calendar, cleanup_events):
+def test_event_across_calendars(calendar_manager, test_event_base, test_calendar, cleanup_events, request):
     """Test moving an event between calendars"""
-    # Get available calendars
-    calendars = calendar_manager.list_calendars()
-    if len(calendars) < 2:
-        pytest.skip("Need at least 2 calendars for this test")
+    source = calendar_manager._create_calendar(test_calendar["name"] + "_source")
+    request.addfinalizer(lambda: calendar_manager._delete_calendar(source.calendarIdentifier()))
 
-    # Create event in the Home calendar
+    # Create an event in a second test calendar
     event = calendar_manager.create_event(
         CreateEventRequest(
             title=test_event_base["title"],
@@ -283,7 +266,7 @@ def test_event_across_calendars(calendar_manager, test_event_base, test_calendar
             end_time=test_event_base["end_time"],
             notes=test_event_base["notes"],
             location=test_event_base["location"],
-            calendar_name="Home",
+            calendar_name=source.title(),
         )
     )
     cleanup_events(event.identifier)
@@ -296,8 +279,8 @@ def test_event_across_calendars(calendar_manager, test_event_base, test_calendar
     assert retrieved_event.calendar_name == test_calendar["name"]
 
 
-def test_create_event_uses_default_calendar(calendar_manager, test_event_base, test_calendar, cleanup_events):
-    """Test that creating an event without specifying calendar uses the default calendar"""
+def test_create_event_uses_requested_calendar(calendar_manager, test_event_base, test_calendar, cleanup_events):
+    """Test that creating an event uses the requested isolated calendar."""
     event = calendar_manager.create_event(
         CreateEventRequest(
             title=test_event_base["title"],
@@ -310,11 +293,10 @@ def test_create_event_uses_default_calendar(calendar_manager, test_event_base, t
     )
     cleanup_events(event.identifier)
 
-    # Get the event and verify it's in the default calendar
+    # Get the event and verify it is in the requested test calendar
     retrieved_event = calendar_manager.find_event_by_id(event.identifier)
     assert retrieved_event is not None
-    # The default calendar should be set
-    assert retrieved_event.calendar_name is not None
+    assert retrieved_event.calendar_name == test_calendar["name"]
 
 
 def test_create_event_nonexistent_calendar(calendar_manager, test_event_base):

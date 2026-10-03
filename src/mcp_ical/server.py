@@ -15,7 +15,7 @@ logger.remove()
 logger.add(
     sys.stderr,
     format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
-    level="DEBUG",
+    level="INFO",
 )
 
 
@@ -40,15 +40,19 @@ def get_calendar_manager() -> CalendarManager:
         raise ValueError(error_msg) from e
 
 
+def _format_calendars(calendars: list[str]) -> str:
+    if not calendars:
+        return "No calendars found"
+    return "Available calendars:\n" + "\n".join(f"- {calendar}" for calendar in calendars)
+
+
 @mcp.resource("calendars://list")
 def get_calendars() -> str:
     """List all available calendars that can be used with calendar operations."""
     try:
         manager = get_calendar_manager()
         calendars = manager.list_calendar_names()
-        if not calendars:
-            return "No calendars found"
-        return "Available calendars:\n" + "\n".join(f"- {cal}" for cal in calendars)
+        return _format_calendars(calendars)
     except ValueError as e:
         return str(e)
     except Exception as e:
@@ -60,11 +64,7 @@ async def list_calendars() -> str:
     """List all available calendars."""
     try:
         manager = get_calendar_manager()
-        calendars = manager.list_calendar_names()
-        if not calendars:
-            return "No calendars found"
-
-        return "Available calendars:\n" + "\n".join(f"- {calendar}" for calendar in calendars)
+        return _format_calendars(manager.list_calendar_names())
 
     except Exception as e:
         return f"Error listing calendars: {str(e)}"
@@ -74,13 +74,11 @@ async def list_calendars() -> str:
 async def list_events(start_date: datetime, end_date: datetime, calendar_name: str | None = None) -> str:
     """List calendar events in a date range.
 
-    The start_date should always use the time such that it represents the beginning of that day (00:00:00).
-    The end_date should always use the time such that it represents the end of that day (23:59:59).
-    This way, range based searches are always inclusive and can locate all events in that date range.
+    Use the desired time window, or 00:00:00 through 23:59:59 for whole days.
 
     Args:
         start_date: Start date in ISO8601 format (YYYY-MM-DDT00:00:00).
-        end_date: Optional end date in ISO8601 format (YYYY-MM-DDT23:59:59).
+        end_date: End date in ISO8601 format (YYYY-MM-DDT23:59:59).
         calendar_name: Optional calendar name to filter by
     """
     try:
@@ -89,7 +87,7 @@ async def list_events(start_date: datetime, end_date: datetime, calendar_name: s
         if not events:
             return "No events found in the specified date range"
 
-        return "".join([str(event) for event in events])
+        return "".join(str(event) for event in events)
 
     except Exception as e:
         return f"Error listing events: {str(e)}"
@@ -97,42 +95,15 @@ async def list_events(start_date: datetime, end_date: datetime, calendar_name: s
 
 @mcp.tool()
 async def create_event(create_event_request: CreateEventRequest) -> str:
-    """Create a new calendar event.
+    """Create an event in the named calendar, or the default calendar when omitted.
 
-    Before using this tool, make sure to:
-    1. Ask the user which calendar they want to use if not specified (check calendars://list)
-    2. Ask if they want to add a location if none provided
-    3. Ask if they want to add any notes/description if none provided
-    4. Confirm the date and time with the user
-    5. Ask if they want to set reminders for the event
-
-    Args:
-        title: Event title
-        start_time: Start time in ISO format (YYYY-MM-DDTHH:MM:SS)
-        end_time: End time in ISO format (YYYY-MM-DDTHH:MM:SS)
-        notes: Optional event notes/description. Ask user if they want to add notes.
-        location: Optional event location. Ask user if they want to specify a location.
-        calendar_name: Optional calendar name. Ask user which calendar to use, referencing calendars://list.
-        all_day: Whether this is an all-day event
-        reminder_offsets: List of minutes before the event to trigger reminders\
-            e.g. [60, 1440] means two reminders, the first 24 hours before the event and the second one hour before.
-        recurrence_rule: Optional recurrence rule for the event. This should be an instance of `RecurrenceRule` with the following fields:
-            - frequency: Frequency of the recurrence (e.g., DAILY, WEEKLY, MONTHLY, YEARLY).
-            - interval: Interval between recurrences (e.g., every 2 weeks).
-            - end_date: Optional end date for the recurrence. If specified, the recurrence will stop on this date.
-            - occurrence_count: Optional number of occurrences. If specified, the recurrence will stop after this many occurrences.
-            - days_of_week: Optional list of weekdays for the event. Use integers to represent days:
-                - Sunday: 1
-                - Monday: 2
-                - Tuesday: 3
-                - Wednesday: 4
-                - Thursday: 5
-                - Friday: 6
-                - Saturday: 7
-
-    Note: Both `end_date` and `occurrence_count` should not be set simultaneously; choose one or the other, or leave both unset.
+    Provide title, start_time and end_time in create_event_request. Times use ISO 8601;
+    include a UTC offset when known. Optional fields include location, notes, url,
+    all_day, alarms_minutes_offsets, and recurrence_rule. Alarm offsets are minutes
+    before the event (for example, [60, 1440]); negative offsets are after the start.
+    Recurrence frequency: 0=daily, 1=weekly, 2=monthly, 3=yearly. Weekdays: 1=Sunday
+    through 7=Saturday. Use at most one of end_date or occurrence_count.
     """
-    logger.info(f"Incoming Create Event Request: {create_event_request}")
     try:
         manager = get_calendar_manager()
 
@@ -148,42 +119,13 @@ async def create_event(create_event_request: CreateEventRequest) -> str:
 
 @mcp.tool()
 async def update_event(event_id: str, update_event_request: UpdateEventRequest) -> str:
-    """Update an existing calendar event.
+    """Update an event by ID using the fields in update_event_request.
 
-    Before using this tool, make sure to:
-    1. Ask the user which fields they want to update
-    2. If moving to a different calendar, verify the calendar exists using calendars://list
-    3. If updating time, confirm the new time with the user
-    4. Ask if they want to add/update location if not specified
-    5. Ask if they want to add/update notes if not specified
-    6. Ask if they want to set reminders for the event
-
-    Args:
-        event_id: Unique identifier of the event to update
-        title: Optional new title
-        start_time: Optional new start time in ISO format
-        end_time: Optional new end time in ISO format
-        notes: Optional new notes/description. Ask user if they want to update notes.
-        location: Optional new location. Ask user if they want to specify/update location.
-        calendar_name: Optional new calendar. Ask user which calendar to use, referencing calendars://list.
-        all_day: Optional all-day flag
-        reminder_offsets: List of minutes before the event to trigger reminders\
-            e.g. [60, 1440] means two reminders, the first 24 hours before the event and the second one hour before.
-        recurrence_rule: Optional recurrence rule for the event. This should be an instance of `RecurrenceRule` with the following fields:
-            - frequency: Frequency of the recurrence (e.g., DAILY, WEEKLY, MONTHLY, YEARLY).
-            - interval: Interval between recurrences (e.g., every 2 weeks).
-            - end_date: Optional end date for the recurrence. If specified, the recurrence will stop on this date.
-            - occurrence_count: Optional number of occurrences. If specified, the recurrence will stop after this many occurrences.
-            - days_of_week: Optional list of weekdays for the event. Use integers to represent days:
-                - Sunday: 1
-                - Monday: 2
-                - Tuesday: 3
-                - Wednesday: 4
-                - Thursday: 5
-                - Friday: 6
-                - Saturday: 7
-
-    Note: Both `end_date` and `occurrence_count` should not be set simultaneously; choose one or the other, or leave both unset.
+    Omitted or null fields stay unchanged. Empty notes or location clear those fields;
+    an empty alarms_minutes_offsets list clears reminders. Times use ISO 8601. Alarm
+    offsets are minutes before the start, including for all-day events. A recurrence
+    update affects this and future occurrences. Use list_events to obtain the event ID
+    and list_calendars to find calendar names.
     """
     try:
         manager = get_calendar_manager()

@@ -50,7 +50,7 @@ class RecurrenceRule(BaseModel):
     frequency: Frequency
     interval: int = Field(default=1, ge=1)
     end_date: FlexibleDateTime | None = None
-    occurrence_count: int | None = None
+    occurrence_count: int | None = Field(default=None, ge=1)
     days_of_week: list[Weekday] | None = None
 
     @model_validator(mode="after")
@@ -129,8 +129,9 @@ class Event:
 
         # Convert EKRecurrenceRule to our Recurrence object
         recurrence = None
-        if ekevent.recurrenceRule():
-            rule = ekevent.recurrenceRule()
+        rules = ekevent.recurrenceRules()
+        if rules:
+            rule = rules[0]
             days = None
             if rule.daysOfTheWeek():
                 days = [Weekday(day.dayOfTheWeek()) for day in rule.daysOfTheWeek()]
@@ -150,20 +151,21 @@ class Event:
 
         return cls(
             title=ekevent.title(),
-            start_time=ekevent.startDate(),
-            end_time=ekevent.endDate(),
+            start_time=convert_datetime(ekevent.startDate()),
+            end_time=convert_datetime(ekevent.endDate()),
             calendar_name=ekevent.calendar().title(),
             location=ekevent.location(),
             notes=ekevent.notes(),
             url=str(ekevent.URL()) if ekevent.URL() else None,
             all_day=ekevent.isAllDay(),
             alarms_minutes_offsets=alarms,
+            has_alarms=bool(alarms),
             recurrence_rule=recurrence,
             availability=ekevent.availability(),
             status=ekevent.status(),
             organizer=str(ekevent.organizer().name()) if ekevent.organizer() else None,
             attendees=attendees,
-            last_modified=ekevent.lastModifiedDate(),
+            last_modified=convert_datetime(ekevent.lastModifiedDate()),
             identifier=ekevent.eventIdentifier(),
             _raw_event=ekevent,
         )
@@ -193,7 +195,7 @@ class Event:
             f" - Alarms (minutes before): {alarms_list},\n"
             f" - URL: {self.url or 'N/A'},\n"
             f" - All Day Event?: {self.all_day},\n"
-            f" - Status: {self.status or 'N/A'},\n"
+            f" - Status: {self.status if self.status is not None else 'N/A'},\n"
             f" - Organizer: {self.organizer or 'N/A'},\n"
             f" - Attendees: {attendees_list},\n"
             f" - {recurrence_info}\n"

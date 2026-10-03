@@ -1,206 +1,83 @@
 # MCP iCal Server
 
-<div align="center">
+An MCP server for reading and updating macOS Calendar through EventKit. It works with
+MCP clients that support stdio and calendars configured in the macOS Calendar app,
+including local, iCloud and other connected calendar accounts.
 
-🗓️ Natural Language Calendar Management for macOS
+## Tools
 
-[![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](https://choosealicense.com/licenses/mit/)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-purple.svg)](https://modelcontextprotocol.io)
+| Tool | Behavior |
+| --- | --- |
+| `list_calendars` | List available event calendar names. |
+| `list_events` | Read events between required start and end times, optionally by calendar name. |
+| `create_event` | Create an event with optional calendar, location, notes, URL, reminders and recurrence. |
+| `update_event` | Update an event by ID; recurring-event updates affect this and future occurrences. |
 
-</div>
+Calendar names are also available from the `calendars://list` resource. The Python
+`CalendarManager` additionally supports event deletion and calendar helpers; these
+are not exposed as MCP tools.
 
-## 🌟 Overview
+Times use ISO 8601. Include the UTC offset when known. Reminder offsets are minutes
+before the event start; negative offsets are after the start. An empty reminder list
+on update clears reminders. Omitted or null update fields stay unchanged.
 
-Transform how you interact with your macOS calendar using natural language! The mcp-ical server leverages the Model Context Protocol (MCP) to turn your calendar management into a conversational experience.
+Recurrence frequencies are `0` (daily), `1` (weekly), `2` (monthly), and `3` (yearly).
+Weekdays run from `1` (Sunday) to `7` (Saturday). Use either an end date or a positive
+occurrence count, or leave both unset. More complex recurrence patterns are not
+represented by the request schema.
+
+## Installation
+
+Requires macOS, Python 3.12+, [uv](https://docs.astral.sh/uv/), a configured Calendar
+app, and an MCP client.
 
 ```bash
-You: "What's my schedule for next week?"
-Claude: "Let me check that for you..."
-[Displays a clean overview of your upcoming week]
-
-You: "Add a lunch meeting with Sarah tomorrow at noon"
-Claude: "✨ 📅 Created: Lunch with Sarah Tomorrow, 12:00 PM"
+git clone https://github.com/Omar-V2/mcp-ical.git
+cd mcp-ical
+uv sync --locked
 ```
 
-## ✨ Features
+Configure the client to run `uv --directory /absolute/path/to/mcp-ical run mcp-ical`.
+For clients using an `mcpServers` configuration, such as Claude Desktop:
 
-### 📅 Event Creation
-
-Transform natural language into calendar events instantly!
-
-```text
-"Schedule a team lunch next Thursday at 1 PM at Bistro Garden"
-↓
-📎 Created: Team Lunch
-   📅 Thursday, 1:00 PM
-   📍 Bistro Garden
-```
-
-#### Supported Features
-
-- Custom calendar selection
-- Location and notes
-- Smart reminders
-- Recurring events
-
-#### Power User Examples
-
-```text
-🔄 Recurring Events:
-"Set up my weekly team sync every Monday at 9 AM with a 15-minute reminder"
-
-📝 Detailed Events:
-"Schedule a product review meeting tomorrow from 2-4 PM in the Engineering calendar, 
-add notes about reviewing Q1 metrics, and remind me 1 hour before"
-
-📱 Multi-Calendar Support:
-"Add a dentist appointment to my Personal calendar for next Wednesday at 3 PM"
-```
-
-### 🔍 Smart Schedule Management & Availability
-
-Quick access to your schedule with natural queries:
-
-```text
-"What's on my calendar for next week?"
-↓
-📊 Shows your upcoming events with smart formatting
-
-"When am I free to schedule a 2-hour meeting next Tuesday?"
-↓
-🕒 Available time slots found:
-   • Tuesday 10:00 AM - 12:00 PM
-   • Tuesday 2:00 PM - 4:00 PM
-```
-
-### ✏️ Intelligent Event Updates
-
-Modify events naturally:
-
-```text
-Before: "Move tomorrow's team meeting to 3 PM instead"
-↓
-After: ✨ Meeting rescheduled to 3:00 PM
-```
-
-#### Update Capabilities
-
-- Time and date modifications
-- Calendar transfers
-- Location updates
-- Note additions
-- Reminder adjustments
-- Recurring pattern changes
-
-### 📊 Calendar Management
-
-- View all available calendars
-- Smart calendar suggestions
-- Seamless Google Calendar integration when configured with iCloud
-
-> 💡 **Pro Tip**: Since you can create events in custom calendars, if you have your Google Calendar synced with your iCloud Calendar, you can use this MCP server to create events in your Google Calendar too! Just specify the Google calendar when creating/updating events.
-
-## 🚀 Quick Start
-
-> 💡 **Note**: While these instructions focus on setting up the MCP server with Claude for Desktop, this server can be used with any MCP-compatible client. For more details on using different clients, see [the MCP documentation](https://modelcontextprotocol.io/quickstart/client).
-
-### Prerequisites
-
-- [uv package manager](https://github.com/astral-sh/uv)
-- macOS with Calendar app configured
-- An MCP client - [Claude for desktop](https://claude.ai/download) is recommended
-
-### Installation
-
-Whilst this MCP server can be used with any MCP compatible client, the instructions below are for use with Claude for desktop.
-
-1. **Clone and Setup**
-
-    ```bash
-    # Clone the repository
-    git clone https://github.com/Omar-V2/mcp-ical.git
-    cd mcp-ical
-
-    # Install dependencies
-    uv sync
-    ```
-
-2. **Configure Claude for Desktop**
-
-    Create or edit `~/Library/Application\ Support/Claude/claude_desktop_config.json`:
-
-    ```json
-    {
-        "mcpServers": {
-            "mcp-ical": {
-                "command": "uv",
-                "args": [
-                    "--directory",
-                    "/ABSOLUTE/PATH/TO/PARENT/FOLDER/mcp-ical",
-                    "run",
-                    "mcp-ical"
-                ]
-            }
-        }
+```json
+{
+  "mcpServers": {
+    "mcp-ical": {
+      "command": "uv",
+      "args": ["--directory", "/absolute/path/to/mcp-ical", "run", "mcp-ical"]
     }
-    ```
-
-3. **Launch Claude for Calendar Access**
-
-    > ⚠️ **Critical**: Claude must be launched from the terminal to properly request calendar permissions. Launching directly from Finder will not trigger the permissions prompt.
-
-    Run the following command in your terminal.
-
-    ```bash
-    /Applications/Claude.app/Contents/MacOS/Claude
-    ```
-
-    > ⚠️ **Warning**: Alternatively, you can [manually grant calendar access](docs/install.md#method-2-manually-grant-calendar-access), but this involves modifying system files and should only be done if you understand the risks involved.
-
-4. **Start Using!**
-
-    ```text
-    Try: "What's my schedule looking like for next week?"
-    ```
-
-> 🔑 **Note**: When you first use a calendar-related command, macOS will prompt for calendar access. This prompt will only appear if you launched Claude from the terminal as specified above.
-
-## 🧪 Testing
-
-> ⚠️ **Warning**: Tests will create temporary calendars and events. While cleanup is automatic, only run tests in development environments.
-
-```bash
-# Install dev dependencies
-uv sync --dev
-
-# Run test suite
-uv run pytest tests
+  }
+}
 ```
 
-## 🐛 Known Issues
+Calendar access is requested on the first calendar operation. Grant access in macOS
+System Settings → Privacy & Security → Calendars for the application running the
+server. See [installation and permission troubleshooting](docs/install.md) if access
+is denied or a permission prompt does not appear.
 
-### Recurring Events
+## Development
 
-- Non-standard recurring schedules may not always be set correctly
-- Better results with Claude 3.5 Sonnet compared to Haiku
-- Reminder timing for recurring all-day events may be off by one day
+```bash
+uv sync --locked --dev
+uv run pytest
+```
 
-## 🤝 Contributing
+The default suite uses mocked calendar stores and skips live integration tests.
+To run integration tests deliberately on a development account with an iCloud
+calendar source:
 
-Feedback and contributions are welcome. Here's how you can help:
+```bash
+uv run pytest --run-integration tests/test_calendar_manager_integration.py
+```
 
-1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Open a Pull Request
+Integration tests create and delete calendars and events. Cleanup targets only the
+calendars created by each test; interrupted runs may leave their test calendars behind.
 
-## 📝 License
+Keep tool names, request fields and text response formats compatible. Test changes
+with mocked EventKit stores before testing against a live calendar.
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## License
 
-## 🙏 Acknowledgments
-
-- Built with [Model Context Protocol](https://modelcontextprotocol.io)
-- macOS Calendar integration built with [PyObjC](https://github.com/ronaldoussoren/pyobjc)
+[MIT](LICENSE). Built with [MCP](https://modelcontextprotocol.io/) and
+[PyObjC](https://pyobjc.readthedocs.io/).

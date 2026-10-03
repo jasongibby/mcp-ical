@@ -1,4 +1,3 @@
-import sys
 from datetime import datetime
 from threading import Semaphore
 from typing import Any
@@ -18,13 +17,6 @@ from .models import (
     CreateEventRequest,
     Event,
     UpdateEventRequest,
-)
-
-logger.remove()
-logger.add(
-    sys.stderr,
-    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
-    level="DEBUG",
 )
 
 
@@ -102,12 +94,11 @@ class CalendarManager:
 
         if new_event.alarms_minutes_offsets:
             for minutes in new_event.alarms_minutes_offsets:
-                # actual_minutes = minutes + (9 * 60) if new_event.all_day else minutes
                 alarm = EKAlarm.alarmWithRelativeOffset_(-60 * minutes)
                 ekevent.addAlarm_(alarm)
 
         if new_event.recurrence_rule:
-            ekevent.setRecurrenceRule_(new_event.recurrence_rule.to_ek_recurrence())
+            ekevent.setRecurrenceRules_([new_event.recurrence_rule.to_ek_recurrence()])
 
         if new_event.calendar_name:
             calendar = self._find_calendar_by_name(new_event.calendar_name)
@@ -154,6 +145,13 @@ class CalendarManager:
         if not existing_ek_event:
             raise NoSuchEventException(event_id)
 
+        # Validate the destination before mutating the EventKit object.
+        if request.calendar_name:
+            calendar = self._find_calendar_by_name(request.calendar_name)
+            if calendar is None:
+                raise NoSuchCalendarException(request.calendar_name)
+            existing_ek_event.setCalendar_(calendar)
+
         if request.title is not None:
             existing_ek_event.setTitle_(request.title)
         if request.start_time is not None:
@@ -169,25 +167,15 @@ class CalendarManager:
         if request.all_day is not None:
             existing_ek_event.setAllDay_(request.all_day)
 
-        # Update calendar if specified
-        if request.calendar_name:
-            calendar = self._find_calendar_by_name(request.calendar_name)
-            if calendar:
-                existing_ek_event.setCalendar_(calendar)
-            else:
-                raise NoSuchCalendarException(request.calendar_name)
-
         # Update recurrence rule
         if request.recurrence_rule is not None:
-            existing_ek_event.setRecurrenceRule_(request.recurrence_rule.to_ek_recurrence())
+            existing_ek_event.setRecurrenceRules_([request.recurrence_rule.to_ek_recurrence()])
 
         # Update alarms if specified
         if request.alarms_minutes_offsets is not None:
             alarms = []
             for minutes in request.alarms_minutes_offsets:
-                # For all-day events EK considers start of day as reference point for alarms, so subtract one day
-                actual_minutes = minutes - 1440 if request.all_day else minutes
-                alarm = EKAlarm.alarmWithRelativeOffset_(-60 * actual_minutes)  # Convert to seconds
+                alarm = EKAlarm.alarmWithRelativeOffset_(-60 * minutes)
                 alarms.append(alarm)
             existing_ek_event.setAlarms_(alarms)
 
@@ -263,7 +251,7 @@ class CalendarManager:
         Returns:
             list[str]: A list of calendar names
         """
-        calendars = self.event_store.calendars()
+        calendars = self.list_calendars()
         return [calendar.title() for calendar in calendars]
 
     def list_calendars(self) -> list[Any]:
@@ -272,7 +260,7 @@ class CalendarManager:
         Returns:
             list[Any]: A list of EK calendar objects
         """
-        return self.event_store.calendars()
+        return self.event_store.calendarsForEntityType_(EKEntityTypeEvent)
 
     def _request_access(self) -> bool:
         """Request access to interact with the MacOS calendar"""
@@ -284,8 +272,15 @@ class CalendarManager:
             access_granted = granted
             semaphore.release()
 
-        self.event_store.requestAccessToEntityType_completion_(0, completion)
-        semaphore.acquire()
+        request_full_access = getattr(self.event_store, "requestFullAccessToEventsWithCompletion_", None)
+        if request_full_access is not None:
+            request_full_access(completion)
+        else:
+            self.event_store.requestAccessToEntityType_completion_(EKEntityTypeEvent, completion)
+        if not semaphore.acquire(timeout=30):
+            raise TimeoutError(
+                "Calendar access request timed out. Grant Calendar access in System Settings and retry."
+            )
         return access_granted
 
     def _find_calendar_by_id(self, calendar_id: str) -> Any | None:
@@ -298,8 +293,8 @@ class CalendarManager:
             Any | None: The calendar if found, None otherwise
         """
 
-        for calendar in self.event_store.calendars():
-            if calendar.uniqueIdentifier() == calendar_id:
+        for calendar in self.list_calendars():
+            if calendar.calendarIdentifier() == calendar_id:
                 return calendar
 
         logger.info(f"Calendar '{calendar_id}' not found")
@@ -315,7 +310,7 @@ class CalendarManager:
             Any | None: The calendar if found, None otherwise
         """
 
-        for calendar in self.event_store.calendars():
+        for calendar in self.list_calendars():
             if calendar.title() == calendar_name:
                 return calendar
 
@@ -327,8 +322,7 @@ class CalendarManager:
 
         Args:
             calendar_name: The name for the new calendar
-            source_type: The type of source to use (2=Exchange, 4=MobileMe/iCloud, 5=Subscribed).
-                        If None, uses the first available source.
+            source_name: Title of the calendar source, such as iCloud.
 
         Returns:
             Any | None: The created calendar if successful, None if failed
@@ -342,7 +336,7 @@ class CalendarManager:
         new_calendar = EKCalendar.calendarForEntityType_eventStore_(EKEntityTypeEvent, self.event_store)
         new_calendar.setTitle_(calendar_name)
 
-        # Set calendar source based on source_type
+        # Select a source that supports calendar creation
         sources = self.event_store.sources()
         selected_source = None
 
@@ -353,7 +347,7 @@ class CalendarManager:
                 break
 
         if not selected_source:
-            available_sources = [(s.title(), s.sourceType()) for s in sources if source.supportsCalendarCreation()]
+            available_sources = [(s.title(), s.sourceType()) for s in sources if s.supportsCalendarCreation()]
             error_msg = f"No source found matching title {source_name}. Available sources: {available_sources}"
             logger.error(error_msg)
             raise ValueError(error_msg)
@@ -375,7 +369,7 @@ class CalendarManager:
             raise
 
     def _delete_calendar(self, calendar_id: str) -> bool:
-        """Delete a calendar by its name with extra verification."""
+        """Delete a calendar by its identifier and verify removal."""
         logger.info(f"Attempting to delete calendar with ID: {calendar_id}")
 
         calendar = self._find_calendar_by_id(calendar_id)
@@ -391,10 +385,9 @@ class CalendarManager:
                 raise Exception(error)
 
             # Verify deletion
-            remaining_calendars = self.list_calendar_names()
-            if calendar_id in remaining_calendars:
+            if self._find_calendar_by_id(calendar_id) is not None:
                 logger.error(f"Calendar {calendar_id} still exists after deletion!")
-                raise Exception(f"Calendar {calendar_id} was not properly deleted")
+                raise RuntimeError(f"Calendar {calendar_id} was not properly deleted")
 
             logger.info(f"Successfully deleted calendar: {calendar_id}")
             return True
